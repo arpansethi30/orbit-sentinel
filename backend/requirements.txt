@@ -1,0 +1,42 @@
+# Core FastAPI Backend
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-multipart
+httpx
+requests
+
+# Database
+sqlalchemy
+
+# Utilities
+python-dotenv
+loguru
+
+# AI/ML Core
+torch
+torchvision
+scikit-learn
+numpy
+pandas
+
+# Space Libraries
+astropy
+skyfield
+pyephem
+
+# Computer Vision
+opencv-python
+Pillow
+
+# Development Tools
+pytest
+pytest-asyncio
+black
+flake8
+mypy
+
+# Data Processing
+scipy
+aiohttp 
