@@ -23,9 +23,10 @@ class SatelliteService:
         self.base_url = "https://celestrak.org"
         self.client = httpx.AsyncClient(timeout=30.0)
         
-        # TLE Cache - Cache data for 30 minutes to reduce API calls
+        # TLE Cache - Cache data for 2 hours to respect CelesTrak rate limits
+        # CelesTrak only updates data every 2 hours, so no need to check more frequently
         self._tle_cache: Dict[str, Any] = {}
-        self._cache_duration = 1800  # 30 minutes in seconds
+        self._cache_duration = 7200  # 2 hours in seconds (respects CelesTrak update frequency)
     
     def _get_cache_key(self, limit: int) -> str:
         """Generate cache key for TLE data"""
@@ -91,7 +92,7 @@ class SatelliteService:
                     self._cache_data(cache_key, satellites)
             
             if not satellites:
-                logger.warning("No satellite data available")
+                logger.error("No satellite data available from CelesTrak - API is unavailable")
                 return None
             
             logger.info(f"Retrieved {len(satellites)} satellites from TLE data")
@@ -162,18 +163,44 @@ class SatelliteService:
     async def _fetch_tle_data(self, limit: int) -> List[dict]:
         """Fetch TLE data from CelesTrak - only called when cache miss"""
         try:
-            # Use active satellites endpoint
+            # Use current CelesTrak GP API endpoint (FORMAT must be lowercase)
+            # Documentation: https://celestrak.org/NORAD/elements/master-gp-index.php
             url = f"{self.base_url}/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
             
+            # Add proper headers - CelesTrak requests respectful usage to prevent abuse
+            # Only download when needed and respect 2-hour update cycle
+            headers = {
+                "User-Agent": "Orbit-Sentinel/1.0 (Space Collision Avoidance System) Python/httpx",
+                "Accept": "text/plain",
+                "Cache-Control": "max-age=7200"  # Respect 2-hour CelesTrak update cycle
+            }
+            
             logger.info(f"Fetching fresh TLE data from CelesTrak (limit={limit})")
-            response = await self.client.get(url)
+            response = await self.client.get(url, headers=headers)
+            
+            # Handle specific HTTP errors with proper professional error handling
+            if response.status_code == 403:
+                logger.error(f"CelesTrak access denied (403) - API may be unavailable or blocking requests")
+                logger.error(f"URL attempted: {url}")
+                logger.error("CRITICAL: Primary satellite data source unavailable")
+                logger.info("System will fail gracefully without fallback data")
+                return []
+            elif response.status_code == 404:
+                logger.error(f"CelesTrak endpoint not found (404) - API structure may have changed")
+                logger.error(f"URL attempted: {url}")
+                return []
+            
             response.raise_for_status()
             
             tle_text = response.text
             satellites = self._parse_tle_data(tle_text, limit)
             
+            logger.info(f"Successfully fetched {len(satellites)} satellites from CelesTrak")
             return satellites
             
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error from CelesTrak: {e.response.status_code} {e.response.reason_phrase}")
+            return []
         except Exception as e:
             logger.error(f"Error fetching TLE data: {e}")
             return []
@@ -353,7 +380,6 @@ class SatelliteService:
         except Exception as e:
             logger.error(f"Error fetching high-risk satellites: {e}")
             return []
-    
     async def close(self):
         """Close HTTP client connections"""
         await self.client.aclose()

@@ -69,8 +69,8 @@ class SpaceWeatherService:
     async def _get_solar_flux(self) -> Optional[Dict[str, Any]]:
         """Fetch F10.7 solar flux data from NOAA"""
         try:
-            # Try alternative endpoint for solar flux
-            url = f"{self.noaa_base_url}/products/10cm-radio-flux/10cm-flux-7-day.json"
+            # Use current NOAA SWPC JSON API endpoint
+            url = "https://services.swpc.noaa.gov/json/f107_cm_flux.json"
             response = await self.client.get(url)
             response.raise_for_status()
             
@@ -87,7 +87,7 @@ class SpaceWeatherService:
                     }
                 elif isinstance(latest, dict):
                     return {
-                        "f107": float(latest.get("flux", latest.get("f10_7", 150))),
+                        "f107": float(latest.get("flux", latest.get("f10_7", latest.get("f107", 150)))),
                         "timestamp": latest.get("time_tag", latest.get("timestamp"))
                     }
             
@@ -97,6 +97,13 @@ class SpaceWeatherService:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"HTTP error fetching solar flux data: {e.response.status_code} {e.response.reason_phrase}")
+            # Return reasonable default
+            return {
+                "f107": 150.0,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
         except Exception as e:
             logger.warning(f"Could not fetch solar flux data: {e}")
             # Return reasonable default
@@ -108,24 +115,30 @@ class SpaceWeatherService:
     async def _get_geomagnetic_data(self) -> Optional[Dict[str, Any]]:
         """Fetch Kp geomagnetic index from NOAA"""
         try:
-            url = f"{self.noaa_base_url}/products/noaa-planetary-k-index.json"
+            # Use current NOAA SWPC JSON API endpoint
+            url = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
             response = await self.client.get(url)
             response.raise_for_status()
             
             data = response.json()
             
-            # Extract latest Kp index
+            # Extract latest Kp index with proper parsing
             if isinstance(data, list) and len(data) > 0:
                 latest = data[-1]
                 # NOAA planetary K-index returns arrays with [time_tag, kp_index, a_index, station]
                 if isinstance(latest, list) and len(latest) >= 2:
+                    kp_raw = latest[1]
+                    # Parse Kp value - handle non-numeric values like '1P', '2P', etc.
+                    kp_value = self._parse_kp_value(kp_raw)
                     return {
-                        "kp": float(latest[1]),  # Second element is Kp value
+                        "kp": kp_value,
                         "timestamp": latest[0]    # First element is timestamp
                     }
                 elif isinstance(latest, dict):
+                    kp_raw = latest.get("kp", latest.get("kp_index", "2.0"))
+                    kp_value = self._parse_kp_value(kp_raw)
                     return {
-                        "kp": float(latest.get("kp", latest.get("kp_index", 2.0))),
+                        "kp": kp_value,
                         "timestamp": latest.get("time_tag", latest.get("timestamp"))
                     }
             
@@ -145,26 +158,31 @@ class SpaceWeatherService:
     async def _get_solar_wind_data(self) -> Optional[Dict[str, Any]]:
         """Fetch solar wind data from NOAA"""
         try:
-            url = f"{self.noaa_base_url}/products/solar-wind/mag-2-hour.json"
+            # Use current NOAA SWPC JSON API endpoint  
+            url = "https://services.swpc.noaa.gov/json/rtsw/rtsw_mag_1m.json"
             response = await self.client.get(url)
             response.raise_for_status()
             
             data = response.json()
             
-            # Extract latest solar wind data
+            # Extract latest solar wind data with safe parsing
             if isinstance(data, list) and len(data) > 0:
                 latest = data[-1]
                 # NOAA solar wind returns arrays with [time_tag, bx, by, bz, lon, lat, bt]
                 if isinstance(latest, list) and len(latest) >= 7:
+                    bt_raw = latest[6]
+                    bt_value = self._safe_float_parse(bt_raw, 5.0)
                     return {
                         "speed": 400.0,  # Default typical solar wind speed (not in mag data)
-                        "bt": float(latest[6]) if latest[6] else 5.0,  # Bt is 7th element
+                        "bt": bt_value,  # Bt is 7th element
                         "timestamp": latest[0]  # First element is timestamp
                     }
                 elif isinstance(latest, dict):
+                    speed_raw = latest.get("wind_speed", latest.get("speed", 400.0))
+                    bt_raw = latest.get("bt", latest.get("magnetic_field", 5.0))
                     return {
-                        "speed": float(latest.get("wind_speed", latest.get("speed", 400.0))),
-                        "bt": float(latest.get("bt", latest.get("magnetic_field", 5.0))),
+                        "speed": self._safe_float_parse(speed_raw, 400.0),
+                        "bt": self._safe_float_parse(bt_raw, 5.0),
                         "timestamp": latest.get("time_tag", latest.get("timestamp"))
                     }
             
@@ -182,6 +200,72 @@ class SpaceWeatherService:
                 "bt": 5.0,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+    
+    def _safe_float_parse(self, value: Any, default: float) -> float:
+        """
+        Safely parse a value to float, handling null/None values and conversion errors
+        
+        Args:
+            value: Value to parse (could be None, string, number, etc.)
+            default: Default value to return if parsing fails
+            
+        Returns:
+            Parsed float value or default if parsing fails
+        """
+        try:
+            if value is None or value == '':
+                return default
+            return float(value)
+        except (ValueError, TypeError):
+            logger.warning(f"Could not parse float value '{value}', using default {default}")
+            return default
+    
+    def _parse_kp_value(self, kp_raw: Any) -> float:
+        """
+        Parse Kp value from NOAA API, handling special codes and non-numeric values
+        
+        NOAA sometimes returns values like '1P', '2P' where P indicates preliminary data
+        or other special codes that need to be handled properly.
+        
+        Args:
+            kp_raw: Raw Kp value from API (could be string, float, or special code)
+            
+        Returns:
+            Parsed Kp value as float (0.0-9.0 range)
+        """
+        try:
+            if kp_raw is None:
+                return 2.0  # Default quiet conditions
+            
+            # Handle string values
+            if isinstance(kp_raw, str):
+                # Remove common suffixes like 'P' (preliminary), 'E' (estimated), etc.
+                kp_clean = kp_raw.rstrip('PEQR-+')
+                
+                # Handle fractional notation like '1-', '1+', '1o'
+                if kp_clean.endswith('-'):
+                    base = float(kp_clean[:-1])
+                    return max(0.0, base - 0.33)  # '-' means subtract 1/3
+                elif kp_clean.endswith('+'):
+                    base = float(kp_clean[:-1])
+                    return min(9.0, base + 0.33)  # '+' means add 1/3
+                elif kp_clean.endswith('o'):
+                    return float(kp_clean[:-1])  # 'o' means exact value
+                else:
+                    return float(kp_clean)
+            
+            # Handle numeric values
+            elif isinstance(kp_raw, (int, float)):
+                return float(kp_raw)
+            
+            # Fallback for unknown types
+            else:
+                logger.warning(f"Unknown Kp value type: {type(kp_raw)} = {kp_raw}")
+                return 2.0
+                
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Could not parse Kp value '{kp_raw}': {e}")
+            return 2.0  # Default quiet conditions
     
     def _calculate_drag_factor(
         self, 

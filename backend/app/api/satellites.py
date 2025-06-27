@@ -51,7 +51,7 @@ async def get_satellites(
         if not result:
             raise HTTPException(
                 status_code=503, 
-                detail="Unable to fetch satellite data from external sources"
+                detail="Satellite tracking data unavailable: CelesTrak API is not responding. This is a known issue with the external data provider. Space weather data may still be available."
             )
         
         logger.info(f"Successfully returned {len(result.satellites)} satellites")
