@@ -12,6 +12,7 @@ from ..models.satellite import SatelliteData, SatelliteResponse, SatelliteType
 from .orbital_mechanics import orbital_service, OrbitalMechanicsService
 from .space_weather import space_weather_service, SpaceWeatherService
 from .collision_detection import collision_service, CollisionDetectionService
+from .space_track_auth import SpaceTrackAuth
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -20,13 +21,14 @@ class SatelliteService:
     """Enhanced service for fetching and analyzing satellite data"""
     
     def __init__(self):
-        self.base_url = "https://celestrak.org"
+        # Initialize Space-Track.org authentication service
+        self.space_track = SpaceTrackAuth()
         self.client = httpx.AsyncClient(timeout=30.0)
         
-        # TLE Cache - Cache data for 2 hours to respect CelesTrak rate limits
-        # CelesTrak only updates data every 2 hours, so no need to check more frequently
+        # TLE Cache - Cache data for 2 hours to respect Space-Track rate limits
+        # Space-Track has rate limits: 300 requests/hour, 30 requests/minute
         self._tle_cache: Dict[str, Any] = {}
-        self._cache_duration = 7200  # 2 hours in seconds (respects CelesTrak update frequency)
+        self._cache_duration = 7200  # 2 hours in seconds (reasonable cache duration)
     
     def _get_cache_key(self, limit: int) -> str:
         """Generate cache key for TLE data"""
@@ -92,7 +94,7 @@ class SatelliteService:
                     self._cache_data(cache_key, satellites)
             
             if not satellites:
-                logger.error("No satellite data available from CelesTrak - API is unavailable")
+                logger.error("No satellite data available from Space-Track.org - API is unavailable")
                 return None
             
             logger.info(f"Retrieved {len(satellites)} satellites from TLE data")
@@ -161,48 +163,36 @@ class SatelliteService:
             return None
     
     async def _fetch_tle_data(self, limit: int) -> List[dict]:
-        """Fetch TLE data from CelesTrak - only called when cache miss"""
+        """Fetch TLE data from Space-Track.org - only called when cache miss"""
         try:
-            # Use current CelesTrak GP API endpoint (FORMAT must be lowercase)
-            # Documentation: https://celestrak.org/NORAD/elements/master-gp-index.php
-            url = f"{self.base_url}/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
+            logger.info(f"Fetching fresh TLE data from Space-Track.org (limit={limit})")
             
-            # Add proper headers - CelesTrak requests respectful usage to prevent abuse
-            # Only download when needed and respect 2-hour update cycle
-            headers = {
-                "User-Agent": "Orbit-Sentinel/1.0 (Space Collision Avoidance System) Python/httpx",
-                "Accept": "text/plain",
-                "Cache-Control": "max-age=7200"  # Respect 2-hour CelesTrak update cycle
-            }
+            # Query Space-Track for recent TLE data
+            # epoch_days=30 gets satellites with TLE data from last 30 days (fresh data)
+            tle_text = await self.space_track.query_tle_data(limit=limit, epoch_days=30)
             
-            logger.info(f"Fetching fresh TLE data from CelesTrak (limit={limit})")
-            response = await self.client.get(url, headers=headers)
-            
-            # Handle specific HTTP errors with proper professional error handling
-            if response.status_code == 403:
-                logger.error(f"CelesTrak access denied (403) - API may be unavailable or blocking requests")
-                logger.error(f"URL attempted: {url}")
-                logger.error("CRITICAL: Primary satellite data source unavailable")
-                logger.info("System will fail gracefully without fallback data")
-                return []
-            elif response.status_code == 404:
-                logger.error(f"CelesTrak endpoint not found (404) - API structure may have changed")
-                logger.error(f"URL attempted: {url}")
+            if not tle_text:
+                logger.error("No TLE data received from Space-Track.org")
+                
+                # Check if it's a configuration issue
+                status = self.space_track.get_status()
+                if not status["configured"]:
+                    logger.error("Space-Track credentials not configured. Set SPACE_TRACK_USERNAME and SPACE_TRACK_PASSWORD environment variables.")
+                elif not status["session_valid"]:
+                    logger.error("Space-Track authentication failed. Check credentials and account status.")
+                else:
+                    logger.error("Space-Track API unavailable or rate limited.")
+                
                 return []
             
-            response.raise_for_status()
-            
-            tle_text = response.text
+            # Parse the TLE data
             satellites = self._parse_tle_data(tle_text, limit)
             
-            logger.info(f"Successfully fetched {len(satellites)} satellites from CelesTrak")
+            logger.info(f"Successfully fetched {len(satellites)} satellites from Space-Track.org")
             return satellites
             
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error from CelesTrak: {e.response.status_code} {e.response.reason_phrase}")
-            return []
         except Exception as e:
-            logger.error(f"Error fetching TLE data: {e}")
+            logger.error(f"Error fetching TLE data from Space-Track.org: {e}")
             return []
 
     def _parse_tle_data(self, tle_text: str, limit: int) -> List[dict]:
@@ -211,28 +201,27 @@ class SatelliteService:
             lines = tle_text.strip().split('\n')
             satellites = []
             
-            # TLE format: Name, Line1, Line2 (3 lines per satellite)
-            for i in range(0, len(lines), 3):
-                if i + 2 >= len(lines):
+            # Space-Track format: Line1, Line2 (2 lines per satellite, no name line)
+            for i in range(0, len(lines), 2):
+                if i + 1 >= len(lines):
                     break
                     
                 if len(satellites) >= limit:
                     break
                     
-                name = lines[i].strip()
-                line1 = lines[i + 1].strip()
-                line2 = lines[i + 2].strip()
+                line1 = lines[i].strip()
+                line2 = lines[i + 1].strip()
                 
                 # Validate TLE format
                 if not line1.startswith('1 ') or not line2.startswith('2 '):
-                    logger.warning(f"Invalid TLE format for satellite: {name}")
+                    logger.warning(f"Skipping invalid TLE lines: {line1[:20]}...")
                     continue
                 
                 # Extract NORAD ID from line1 (positions 2-7)
                 try:
                     norad_id = int(line1[2:7].strip())
                 except ValueError:
-                    logger.warning(f"Could not parse NORAD ID for satellite: {name}")
+                    logger.warning(f"Could not parse NORAD ID from: {line1[:20]}")
                     continue
                 
                 # Extract epoch from line1 (positions 18-32)
@@ -240,8 +229,14 @@ class SatelliteService:
                     epoch_str = line1[18:32].strip()
                     epoch = self._parse_tle_epoch(epoch_str)
                 except Exception as e:
-                    logger.warning(f"Could not parse epoch for satellite {name}: {e}")
+                    logger.warning(f"Could not parse epoch from line: {line1[:20]} - {e}")
                     epoch = datetime.now(timezone.utc)
+                
+                # Generate a name from NORAD ID (Space-Track doesn't provide names in TLE format)
+                name = f"SATELLITE-{norad_id}"
+                
+                # Try to get a better name from common satellites
+                name = self._get_satellite_name(norad_id, line1, line2)
                 
                 satellite_data = {
                     "name": name,
@@ -259,6 +254,56 @@ class SatelliteService:
         except Exception as e:
             logger.error(f"Error parsing TLE data: {e}")
             return []
+
+    def _get_satellite_name(self, norad_id: int, line1: str, line2: str) -> str:
+        """Generate or lookup satellite name from NORAD ID"""
+        # Common well-known satellites
+        known_satellites = {
+            25544: "ISS (ZARYA)",
+            20580: "HUBBLE SPACE TELESCOPE",
+            25338: "NOAA 15",
+            27424: "NOAA 16", 
+            28654: "NOAA 18",
+            33591: "NOAA 19",
+            43013: "NOAA 20",
+            5: "VANGUARD 2",
+            11: "SCORE",
+            16: "EXPLORER 6",
+            29: "ECHO 1"
+        }
+        
+        if norad_id in known_satellites:
+            return known_satellites[norad_id]
+        
+        # Extract classification from orbital characteristics
+        try:
+            # Parse inclination from line2 (positions 8-16)
+            inclination = float(line2[8:16].strip())
+            
+            # Parse mean motion from line2 (positions 52-63)
+            mean_motion = float(line2[52:63].strip())
+            
+            # Classify based on orbital characteristics
+            if inclination > 95 and inclination < 105:
+                # Polar/sun-synchronous orbit
+                if mean_motion > 14:
+                    return f"LEO POLAR-{norad_id}"
+                else:
+                    return f"POLAR ORBIT-{norad_id}"
+            elif inclination < 10:
+                # Equatorial orbit
+                if mean_motion < 2:
+                    return f"GEO-{norad_id}"
+                else:
+                    return f"EQUATORIAL-{norad_id}"
+            elif 50 < inclination < 60:
+                # Possible ISS/crew vehicle orbit
+                return f"LEO CREW-{norad_id}"
+            else:
+                return f"SATELLITE-{norad_id}"
+                
+        except:
+            return f"SATELLITE-{norad_id}"
     
     def _parse_tle_epoch(self, epoch_str: str) -> datetime:
         """Parse TLE epoch format (YYDDD.DDDDDDDD) to datetime"""

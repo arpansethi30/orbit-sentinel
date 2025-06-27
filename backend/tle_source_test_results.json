@@ -1,0 +1,27 @@
+{
+  "timestamp": "2025-06-27T15:18:03.382222",
+  "results": {
+    "space_track": {
+      "accessible": true,
+      "requires_auth": true,
+      "note": "Free registration required at https://www.space-track.org/auth/createAccount"
+    },
+    "amateur_0": {
+      "url": "https://www.amsat.org/tle/current/nasabare.txt",
+      "status": 200,
+      "content_length": 15730,
+      "working": true
+    },
+    "mock_data": {
+      "satellites_count": 5,
+      "data_length": 824,
+      "suitable_for_demo": true
+    }
+  },
+  "summary": {
+    "celestrak_working": false,
+    "amateur_working": true,
+    "alternatives_available": true,
+    "mock_data_ready": true
+  }
+}
