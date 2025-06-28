@@ -4,7 +4,7 @@ Dashboard API endpoints for advanced analytics and real-time metrics
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 
@@ -22,7 +22,7 @@ class SystemMetricsResponse(BaseModel):
     active_satellites: int
     high_risk_objects: int
     collision_alerts: int
-    space_weather_kp: float
+    space_weather_kp: Optional[float]
     data_sources_active: int
     data_sources_list: List[str]
     last_updated: datetime

@@ -46,6 +46,11 @@ class SpaceWeatherService:
             geomagnetic = results[1] if not isinstance(results[1], Exception) else None
             solar_wind = results[2] if not isinstance(results[2], Exception) else None
             
+            # Only return data if we have at least some real values
+            if not any([solar_flux, geomagnetic, solar_wind]):
+                logger.warning("No real space weather data available from APIs")
+                return None
+            
             # Calculate atmospheric drag factor based on space weather
             drag_factor = self._calculate_drag_factor(solar_flux, geomagnetic)
             
@@ -60,6 +65,7 @@ class SpaceWeatherService:
             # Cache the result
             self._cache_data(cache_key, space_weather)
             
+            logger.info(f"Space weather data: F10.7={space_weather.solar_flux_f107}, Kp={space_weather.geomagnetic_kp}")
             return space_weather
             
         except Exception as e:
@@ -91,26 +97,17 @@ class SpaceWeatherService:
                         "timestamp": latest.get("time_tag", latest.get("timestamp"))
                     }
             
-            # Fallback to a reasonable default if API fails
-            return {
-                "f107": 150.0,  # Typical solar minimum value
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # No fallback - return None if API fails
+            return None
             
         except httpx.HTTPStatusError as e:
             logger.warning(f"HTTP error fetching solar flux data: {e.response.status_code} {e.response.reason_phrase}")
-            # Return reasonable default
-            return {
-                "f107": 150.0,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # No fallback - return None if API fails
+            return None
         except Exception as e:
             logger.warning(f"Could not fetch solar flux data: {e}")
-            # Return reasonable default
-            return {
-                "f107": 150.0,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # No fallback - return None if API fails  
+            return None
     
     async def _get_geomagnetic_data(self) -> Optional[Dict[str, Any]]:
         """Fetch Kp geomagnetic index from NOAA"""
@@ -122,92 +119,81 @@ class SpaceWeatherService:
             
             data = response.json()
             
-            # Extract latest Kp index with proper parsing
+            # Extract latest Kp index - NOAA returns array of objects
             if isinstance(data, list) and len(data) > 0:
-                latest = data[-1]
-                # NOAA planetary K-index returns arrays with [time_tag, kp_index, a_index, station]
-                if isinstance(latest, list) and len(latest) >= 2:
-                    kp_raw = latest[1]
-                    # Parse Kp value - handle non-numeric values like '1P', '2P', etc.
+                latest = data[-1]  # Get most recent reading
+                if isinstance(latest, dict):
+                    # Use estimated_kp for more precise values, fallback to kp_index
+                    kp_raw = latest.get("estimated_kp", latest.get("kp_index", latest.get("kp")))
                     kp_value = self._parse_kp_value(kp_raw)
                     return {
                         "kp": kp_value,
-                        "timestamp": latest[0]    # First element is timestamp
-                    }
-                elif isinstance(latest, dict):
-                    kp_raw = latest.get("kp", latest.get("kp_index", "2.0"))
-                    kp_value = self._parse_kp_value(kp_raw)
-                    return {
-                        "kp": kp_value,
-                        "timestamp": latest.get("time_tag", latest.get("timestamp"))
+                        "timestamp": latest.get("time_tag")
                     }
             
-            # Fallback default
-            return {
-                "kp": 2.0,  # Quiet geomagnetic conditions
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # No fallback - return None if API fails
+            return None
             
         except Exception as e:
             logger.warning(f"Could not fetch geomagnetic data: {e}")
-            return {
-                "kp": 2.0,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # No fallback - return None if API fails
+            return None
     
     async def _get_solar_wind_data(self) -> Optional[Dict[str, Any]]:
-        """Fetch solar wind data from NOAA"""
+        """Fetch solar wind data from NOAA (magnetic field and speed)"""
         try:
-            # Use current NOAA SWPC JSON API endpoint  
-            url = "https://services.swpc.noaa.gov/json/rtsw/rtsw_mag_1m.json"
-            response = await self.client.get(url)
-            response.raise_for_status()
+            # Get magnetic field data
+            mag_url = "https://services.swpc.noaa.gov/json/rtsw/rtsw_mag_1m.json"
+            wind_url = "https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.json"
             
-            data = response.json()
+            # Fetch both magnetic field and wind speed
+            mag_response = await self.client.get(mag_url)
+            mag_response.raise_for_status()
+            mag_data = mag_response.json()
             
-            # Extract latest solar wind data with safe parsing
-            if isinstance(data, list) and len(data) > 0:
-                latest = data[-1]
-                # NOAA solar wind returns arrays with [time_tag, bx, by, bz, lon, lat, bt]
-                if isinstance(latest, list) and len(latest) >= 7:
-                    bt_raw = latest[6]
-                    bt_value = self._safe_float_parse(bt_raw, 5.0)
-                    return {
-                        "speed": 400.0,  # Default typical solar wind speed (not in mag data)
-                        "bt": bt_value,  # Bt is 7th element
-                        "timestamp": latest[0]  # First element is timestamp
-                    }
-                elif isinstance(latest, dict):
-                    speed_raw = latest.get("wind_speed", latest.get("speed", 400.0))
-                    bt_raw = latest.get("bt", latest.get("magnetic_field", 5.0))
-                    return {
-                        "speed": self._safe_float_parse(speed_raw, 400.0),
-                        "bt": self._safe_float_parse(bt_raw, 5.0),
-                        "timestamp": latest.get("time_tag", latest.get("timestamp"))
-                    }
+            wind_response = await self.client.get(wind_url)
+            wind_response.raise_for_status()
+            wind_data = wind_response.json()
             
-            # Fallback default
+            # Parse magnetic field data
+            bt_value = None
+            mag_timestamp = None
+            if isinstance(mag_data, list) and len(mag_data) > 0:
+                latest_mag = mag_data[-1]
+                if isinstance(latest_mag, dict):
+                    bt_raw = latest_mag.get("bt")
+                    bt_value = self._safe_float_parse(bt_raw, None)
+                    mag_timestamp = latest_mag.get("time_tag")
+            
+            # Parse wind speed data
+            speed_value = None
+            wind_timestamp = None
+            if isinstance(wind_data, list) and len(wind_data) > 0:
+                latest_wind = wind_data[-1]
+                if isinstance(latest_wind, dict):
+                    speed_raw = latest_wind.get("proton_speed")
+                    speed_value = self._safe_float_parse(speed_raw, None)
+                    wind_timestamp = latest_wind.get("time_tag")
+            
+            # Return combined data
             return {
-                "speed": 400.0,  # km/s - typical solar wind speed
-                "bt": 5.0,       # nT - typical magnetic field
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "speed": speed_value,
+                "bt": bt_value,
+                "timestamp": mag_timestamp or wind_timestamp
             }
             
         except Exception as e:
             logger.warning(f"Could not fetch solar wind data: {e}")
-            return {
-                "speed": 400.0,
-                "bt": 5.0,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # No fallback - return None if API fails
+            return None
     
-    def _safe_float_parse(self, value: Any, default: float) -> float:
+    def _safe_float_parse(self, value: Any, default: Optional[float]) -> Optional[float]:
         """
         Safely parse a value to float, handling null/None values and conversion errors
         
         Args:
             value: Value to parse (could be None, string, number, etc.)
-            default: Default value to return if parsing fails
+            default: Default value to return if parsing fails (can be None)
             
         Returns:
             Parsed float value or default if parsing fails
@@ -217,10 +203,10 @@ class SpaceWeatherService:
                 return default
             return float(value)
         except (ValueError, TypeError):
-            logger.warning(f"Could not parse float value '{value}', using default {default}")
+            logger.warning(f"Could not parse float value '{value}', returning {default}")
             return default
     
-    def _parse_kp_value(self, kp_raw: Any) -> float:
+    def _parse_kp_value(self, kp_raw: Any) -> Optional[float]:
         """
         Parse Kp value from NOAA API, handling special codes and non-numeric values
         
@@ -235,7 +221,7 @@ class SpaceWeatherService:
         """
         try:
             if kp_raw is None:
-                return 2.0  # Default quiet conditions
+                return None  # No fallback - return None if no data
             
             # Handle string values
             if isinstance(kp_raw, str):
@@ -261,11 +247,11 @@ class SpaceWeatherService:
             # Fallback for unknown types
             else:
                 logger.warning(f"Unknown Kp value type: {type(kp_raw)} = {kp_raw}")
-                return 2.0
+                return None
                 
         except (ValueError, TypeError) as e:
             logger.warning(f"Could not parse Kp value '{kp_raw}': {e}")
-            return 2.0  # Default quiet conditions
+            return None  # No fallback - return None if parsing fails
     
     def _calculate_drag_factor(
         self, 

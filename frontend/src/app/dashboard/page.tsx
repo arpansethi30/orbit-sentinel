@@ -6,26 +6,14 @@ import {
   Satellite, 
   AlertTriangle, 
   CloudLightning, 
-  BarChart3, 
-  Globe, 
-  Zap, 
+  Globe,
   Activity,
   Shield,
-  Orbit,
-  TrendingUp,
-  ArrowRight,
-  ExternalLink,
-  Brain,
-  Calculator,
-  Target,
-  Clock
+  Clock,
+  TrendingUp
 } from 'lucide-react';
-import Link from 'next/link';
-import { satelliteApi, SatelliteResponse, SpaceWeatherData, handleApiError } from '@/lib/api';
-import { cn, formatNumber, getRiskColor } from '@/lib/utils';
 
-// Types for new analytics data
-interface SystemMetrics {
+interface DashboardMetrics {
   total_satellites: number;
   active_satellites: number;
   high_risk_objects: number;
@@ -33,9 +21,8 @@ interface SystemMetrics {
   space_weather_kp: number;
   data_sources_active: number;
   data_sources_list: string[];
-  last_updated: string;
   tracking_coverage: number;
-  status: string;
+  last_updated: string;
 }
 
 interface PredictiveAnalytics {
@@ -44,195 +31,80 @@ interface PredictiveAnalytics {
   orbital_decay_predictions: number;
   space_weather_impact_score: number;
   active_tracking_satellites: number;
-  last_calculated: string;
 }
 
-interface DashboardSummary {
-  system_metrics: SystemMetrics;
-  predictive_analytics: PredictiveAnalytics;
-  advanced_features: {
-    predictive_intelligence: {
-      status: string;
-      features: string[];
-    };
-    orbital_calculations: {
-      status: string;
-      capabilities: string[];
-    };
-    collision_prediction: {
-      status: string;
-      models: string[];
-    };
-    real_time_tracking: {
-      status: string;
-      coverage: string;
-      active_satellites: number;
-      update_frequency: string;
-    };
-  };
+interface CollisionPrediction {
+  probability_score: number;
+  high_risk_pairs: Array<{
+    satellite1: { name: string; norad_id: number };
+    satellite2: { name: string; norad_id: number };
+    combined_risk: number;
+    closest_approach_km: number;
+  }>;
+  critical_time_windows: Array<{
+    satellite: { name: string; norad_id: number };
+    time_window_start: string;
+    time_window_end: string;
+    risk_level: string;
+    probability: number;
+  }>;
+  risk_assessment: string;
+  confidence_level: number;
 }
-
-// Card component with modern styling
-const Card = ({ 
-  children, 
-  className = '', 
-  hover = true,
-  href = null
-}: { 
-  children: React.ReactNode; 
-  className?: string;
-  hover?: boolean;
-  href?: string | null;
-}) => {
-  const cardContent = (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
-      className={cn(
-        'bg-white rounded-2xl border border-gray-100 shadow-sm',
-        hover && 'hover:shadow-lg hover:border-gray-200 transition-all duration-300',
-        className
-      )}
-    >
-      {children}
-    </motion.div>
-  );
-
-  if (href) {
-    return (
-      <Link href={href}>
-        {cardContent}
-      </Link>
-    );
-  }
-
-  return cardContent;
-};
-
-// Stat card component
-const StatCard = ({ 
-  title, 
-  value, 
-  change, 
-  icon: Icon, 
-  color = 'blue',
-  pulse = false
-}: { 
-  title: string; 
-  value: string; 
-  change?: string; 
-  icon: any; 
-  color?: string;
-  pulse?: boolean;
-}) => {
-  const colorClasses = {
-    blue: 'text-blue-600 bg-blue-50',
-    green: 'text-green-600 bg-green-50',
-    orange: 'text-orange-600 bg-orange-50',
-    red: 'text-red-600 bg-red-50',
-    purple: 'text-purple-600 bg-purple-50',
-  };
-
-  return (
-    <Card className="p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-gray-600">{title}</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
-          {change && (
-            <p className="text-sm text-gray-500 mt-1">{change}</p>
-          )}
-        </div>
-        <div className={cn(
-          'p-3 rounded-xl', 
-          colorClasses[color as keyof typeof colorClasses],
-          pulse && 'animate-pulse'
-        )}>
-          <Icon className="w-6 h-6" />
-        </div>
-      </div>
-    </Card>
-  );
-};
-
-// API functions for new endpoints
-const API_BASE = 'http://localhost:8000';
-
-const fetchDashboardSummary = async (): Promise<DashboardSummary> => {
-  const response = await fetch(`${API_BASE}/api/dashboard/summary`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch dashboard summary: ${response.statusText}`);
-  }
-  return response.json();
-};
-
-const fetchSystemMetrics = async (): Promise<SystemMetrics> => {
-  const response = await fetch(`${API_BASE}/api/dashboard/metrics`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch system metrics: ${response.statusText}`);
-  }
-  return response.json();
-};
-
-const fetchPredictiveAnalytics = async (): Promise<PredictiveAnalytics> => {
-  const response = await fetch(`${API_BASE}/api/dashboard/analytics`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch predictive analytics: ${response.statusText}`);
-  }
-  return response.json();
-};
 
 export default function DashboardPage() {
-  const [dashboardData, setDashboardData] = useState<DashboardSummary | null>(null);
-  const [satelliteData, setSatelliteData] = useState<SatelliteResponse | null>(null);
-  const [typesSummary, setTypesSummary] = useState<any>(null);
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [analytics, setAnalytics] = useState<PredictiveAnalytics | null>(null);
+  const [collisionPrediction, setCollisionPrediction] = useState<CollisionPrediction | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchAllData = async () => {
+    const fetchDashboardData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        // Fetch all data in parallel for performance
-        const [dashboard, satellites, types] = await Promise.all([
-          fetchDashboardSummary(),
-          satelliteApi.getSatellites({ 
-            limit: 50, 
-            include_orbital: true, 
-            include_weather: true, 
-            include_risk: true 
-          }),
-          satelliteApi.getSatelliteTypesSummary(),
+        const [metricsRes, analyticsRes, collisionRes] = await Promise.all([
+          fetch('http://localhost:8000/api/dashboard/metrics'),
+          fetch('http://localhost:8000/api/dashboard/analytics'),
+          fetch('http://localhost:8000/api/dashboard/collision-prediction')
         ]);
 
-        setDashboardData(dashboard);
-        setSatelliteData(satellites);
-        setTypesSummary(types);
+        if (!metricsRes.ok || !analyticsRes.ok || !collisionRes.ok) {
+          throw new Error('Failed to fetch dashboard data');
+        }
 
+        const [metricsData, analyticsData, collisionData] = await Promise.all([
+          metricsRes.json(),
+          analyticsRes.json(),
+          collisionRes.json()
+        ]);
+
+        setMetrics(metricsData);
+        setAnalytics(analyticsData);
+        setCollisionPrediction(collisionData);
       } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-        setError(handleApiError(err));
+        setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
+        console.error('Dashboard data fetch error:', err);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchAllData();
+    fetchDashboardData();
     
     // Refresh data every 30 seconds
-    const interval = setInterval(fetchAllData, 30000);
+    const interval = setInterval(fetchDashboardData, 30000);
     return () => clearInterval(interval);
   }, []);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-96">
+      <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading advanced analytics...</p>
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
+          <p className="mt-4 text-gray-600">Loading real-time space data...</p>
         </div>
       </div>
     );
@@ -240,25 +112,12 @@ export default function DashboardPage() {
 
   if (error) {
     return (
-      <div className="text-center py-12">
-        <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
-          <AlertTriangle className="w-8 h-8 text-red-600" />
-        </div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">Connection Error</h3>
-        <p className="text-gray-600 mb-4">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          Try Again
-        </button>
+      <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-red-900 mb-2">⚠️ Dashboard Error</h3>
+        <p className="text-red-700">{error}</p>
       </div>
     );
   }
-
-  const metrics = dashboardData?.system_metrics;
-  const analytics = dashboardData?.predictive_analytics;
-  const features = dashboardData?.advanced_features;
 
   return (
     <div className="space-y-8">
@@ -282,16 +141,16 @@ export default function DashboardPage() {
           </p>
           <div className="flex flex-wrap justify-center gap-4">
             <div className="px-4 py-2 bg-green-50 text-green-700 rounded-full text-sm font-medium">
-              ✅ {formatNumber(metrics?.total_satellites || 0, 0)} Satellites Tracked
+              ✅ {metrics?.total_satellites || 0} Satellites Tracked
             </div>
             <div className="px-4 py-2 bg-blue-50 text-blue-700 rounded-full text-sm font-medium">
               🧠 Predictive Intelligence Active
             </div>
             <div className="px-4 py-2 bg-purple-50 text-purple-700 rounded-full text-sm font-medium">
-              📊 {formatNumber((analytics?.collision_probability_24h || 0) * 100, 2)}% 24h Collision Risk
+              📊 {((analytics?.collision_probability_24h || 0) * 100).toFixed(1)}% 24h Collision Risk
             </div>
             <div className="px-4 py-2 bg-orange-50 text-orange-700 rounded-full text-sm font-medium">
-              ⚡ {formatNumber(metrics?.tracking_coverage || 0, 1)}% Tracking Coverage
+              ⚡ {metrics?.tracking_coverage?.toFixed(1)}% Tracking Coverage
             </div>
           </div>
         </div>
@@ -299,262 +158,207 @@ export default function DashboardPage() {
 
       {/* Real-time Key Statistics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard
-          title="Active Satellites"
-          value={formatNumber(metrics?.active_satellites || 0, 0)}
-          change="Live tracking"
-          icon={Satellite}
-          color="blue"
-          pulse={true}
-        />
-        <StatCard
-          title="High Risk Objects"
-          value={formatNumber(metrics?.high_risk_objects || 0, 0)}
-          change="Collision alerts"
-          icon={AlertTriangle}
-          color="red"
-        />
-        <StatCard
-          title="Space Weather"
-          value={metrics?.space_weather_kp ? formatNumber(metrics.space_weather_kp, 1) : 'N/A'}
-          change="Kp Index"
-          icon={CloudLightning}
-          color="orange"
-        />
-        <StatCard
-          title="Data Sources"
-          value={formatNumber(metrics?.data_sources_active || 0, 0)}
-          change={metrics?.data_sources_list?.join(' • ') || 'Loading...'}
-          icon={Globe}
-          color="green"
-        />
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Active Satellites</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{metrics?.active_satellites || 0}</p>
+              <p className="text-sm text-gray-500 mt-1">Live tracking</p>
+            </div>
+            <div className="p-3 rounded-xl text-blue-600 bg-blue-50">
+              <Satellite className="w-6 h-6" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">High Risk Objects</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{metrics?.high_risk_objects || 0}</p>
+              <p className="text-sm text-gray-500 mt-1">Collision alerts</p>
+            </div>
+            <div className="p-3 rounded-xl text-red-600 bg-red-50">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Space Weather</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{metrics?.space_weather_kp?.toFixed(2) || 'N/A'}</p>
+              <p className="text-sm text-gray-500 mt-1">Kp Index</p>
+            </div>
+            <div className="p-3 rounded-xl text-orange-600 bg-orange-50">
+              <CloudLightning className="w-6 h-6" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Data Sources</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{metrics?.data_sources_active || 0}</p>
+              <p className="text-sm text-gray-500 mt-1">{metrics?.data_sources_list?.join(' • ') || 'Loading...'}</p>
+            </div>
+            <div className="p-3 rounded-xl text-green-600 bg-green-50">
+              <Globe className="w-6 h-6" />
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Advanced Analytics Features */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Predictive Intelligence */}
-        <Card className="p-8">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="p-3 bg-purple-50 rounded-xl">
-              <Brain className="w-6 h-6 text-purple-600" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Predictive Intelligence</h3>
-              <p className="text-gray-600">Advanced collision probability models</p>
-            </div>
-          </div>
-          
+      {/* Predictive Analytics Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+            <TrendingUp className="w-5 h-5 mr-2 text-purple-600" />
+            Predictive Analytics
+          </h3>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-purple-50 rounded-xl">
-                <p className="text-sm text-gray-600">24h Collision Risk</p>
-                <p className="text-2xl font-bold text-purple-900">
-                  {formatNumber((analytics?.collision_probability_24h || 0) * 100, 3)}%
-                </p>
-              </div>
-              <div className="p-4 bg-red-50 rounded-xl">
-                <p className="text-sm text-gray-600">High Risk Events</p>
-                <p className="text-2xl font-bold text-red-900">
-                  {formatNumber(analytics?.high_risk_events || 0, 0)}
-                </p>
-              </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">24h Collision Probability</span>
+              <span className="text-lg font-bold text-purple-600">
+                {((analytics?.collision_probability_24h || 0) * 100).toFixed(2)}%
+              </span>
             </div>
-            
-            <div className="p-4 bg-gray-50 rounded-xl">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-gray-600">Orbital Decay Predictions</p>
-                <TrendingUp className="w-4 h-4 text-orange-600" />
-              </div>
-              <p className="text-lg font-bold text-gray-900">
-                {formatNumber(analytics?.orbital_decay_predictions || 0, 0)} satellites at risk
-              </p>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">High Risk Events</span>
+              <span className="text-lg font-bold text-red-600">{analytics?.high_risk_events || 0}</span>
             </div>
-            
-            <div className="flex items-center text-purple-600 text-sm font-medium">
-              <span>Real-time Active</span>
-              <Activity className="w-4 h-4 ml-1 animate-pulse" />
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Orbital Decay Predictions</span>
+              <span className="text-lg font-bold text-orange-600">{analytics?.orbital_decay_predictions || 0}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Space Weather Impact</span>
+              <span className="text-lg font-bold text-blue-600">{analytics?.space_weather_impact_score?.toFixed(1) || 'N/A'}</span>
             </div>
           </div>
-        </Card>
+        </div>
 
-        {/* Orbital Calculations */}
-        <Card className="p-8" href="/satellites">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="p-3 bg-blue-50 rounded-xl">
-              <Calculator className="w-6 h-6 text-blue-600" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Orbital Calculations</h3>
-              <p className="text-gray-600">Real-time position tracking</p>
-            </div>
-          </div>
-          
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+            <Shield className="w-5 h-5 mr-2 text-red-600" />
+            Collision Risk Assessment
+          </h3>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-blue-50 rounded-xl">
-                <p className="text-sm text-gray-600">Active Tracking</p>
-                <p className="text-2xl font-bold text-blue-900">
-                  {formatNumber(analytics?.active_tracking_satellites || 0, 0)}
-                </p>
-              </div>
-              <div className="p-4 bg-green-50 rounded-xl">
-                <p className="text-sm text-gray-600">Coverage</p>
-                <p className="text-2xl font-bold text-green-900">
-                  {formatNumber(metrics?.tracking_coverage || 0, 1)}%
-                </p>
-              </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Overall Risk</span>
+              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                collisionPrediction?.risk_assessment === 'HIGH' ? 'bg-red-100 text-red-700' :
+                collisionPrediction?.risk_assessment === 'MODERATE' ? 'bg-yellow-100 text-yellow-700' :
+                'bg-green-100 text-green-700'
+              }`}>
+                {collisionPrediction?.risk_assessment || 'Unknown'}
+              </span>
             </div>
-            
-            <div className="p-4 bg-gray-50 rounded-xl">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-gray-600">Space Weather Impact</p>
-                <CloudLightning className="w-4 h-4 text-orange-600" />
-              </div>
-              <p className="text-lg font-bold text-gray-900">
-                {formatNumber(analytics?.space_weather_impact_score || 0, 1)}/10 Impact Score
-              </p>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Confidence Level</span>
+              <span className="text-lg font-bold text-green-600">
+                {((collisionPrediction?.confidence_level || 0) * 100).toFixed(0)}%
+              </span>
             </div>
-            
-            <div className="flex items-center text-blue-600 text-sm font-medium">
-              <span>View All Satellites</span>
-              <ArrowRight className="w-4 h-4 ml-1" />
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">High-Risk Pairs</span>
+              <span className="text-lg font-bold text-red-600">
+                {collisionPrediction?.high_risk_pairs?.length || 0}
+              </span>
             </div>
-          </div>
-        </Card>
-
-        {/* Collision Prediction */}
-        <Card className="p-8" href="/risks">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="p-3 bg-red-50 rounded-xl">
-              <Target className="w-6 h-6 text-red-600" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Collision Prediction</h3>
-              <p className="text-gray-600">24-hour probability models</p>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Critical Time Windows</span>
+              <span className="text-lg font-bold text-orange-600">
+                {collisionPrediction?.critical_time_windows?.length || 0}
+              </span>
             </div>
           </div>
-          
-          <div className="space-y-4">
-            {metrics?.collision_alerts && metrics.collision_alerts > 0 ? (
-              <div className="p-4 bg-red-50 rounded-xl border border-red-200">
-                <div className="flex items-center space-x-2 mb-2">
-                  <AlertTriangle className="w-5 h-5 text-red-600" />
-                  <p className="font-semibold text-red-900">Critical Alert</p>
-                </div>
-                <p className="text-red-700">
-                  {metrics.collision_alerts} high-probability collision events detected
-                </p>
-              </div>
-            ) : (
-              <div className="p-4 bg-green-50 rounded-xl border border-green-200">
-                <div className="flex items-center space-x-2 mb-2">
-                  <Shield className="w-5 h-5 text-green-600" />
-                  <p className="font-semibold text-green-900">All Clear</p>
-                </div>
-                <p className="text-green-700">No high-risk collisions predicted in next 24 hours</p>
-              </div>
-            )}
-            
-            <div className="p-4 bg-gray-50 rounded-xl">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-gray-600">24h Prediction Models</p>
-                <Clock className="w-4 h-4 text-blue-600" />
-              </div>
-              <p className="text-sm text-gray-900">Monte Carlo risk assessment active</p>
-            </div>
-            
-            <div className="flex items-center text-red-600 text-sm font-medium">
-              <span>View Risk Assessment</span>
-              <ArrowRight className="w-4 h-4 ml-1" />
-            </div>
-          </div>
-        </Card>
-
-        {/* Real-time Tracking */}
-        <Card className="p-8" href="/weather">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="p-3 bg-green-50 rounded-xl">
-              <Activity className="w-6 h-6 text-green-600" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Real-time Active</h3>
-              <p className="text-gray-600">Live environmental monitoring</p>
-            </div>
-          </div>
-          
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-gray-50 rounded-xl">
-                <p className="text-sm text-gray-600">Update Frequency</p>
-                <p className="text-lg font-bold text-gray-900">Real-time</p>
-              </div>
-              <div className="p-4 bg-gray-50 rounded-xl">
-                <p className="text-sm text-gray-600">System Status</p>
-                <p className="text-lg font-bold text-green-900">Active</p>
-              </div>
-            </div>
-            
-            <div className="p-4 bg-green-50 rounded-xl">
-              <div className="flex items-center space-x-2 mb-2">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <p className="font-semibold text-green-900">Live Data Stream</p>
-              </div>
-              <p className="text-green-700">
-                {features?.real_time_tracking?.coverage || 'N/A'} tracking coverage
-              </p>
-            </div>
-            
-            <div className="flex items-center text-green-600 text-sm font-medium">
-              <span>View Space Weather</span>
-              <ArrowRight className="w-4 h-4 ml-1" />
-            </div>
-          </div>
-        </Card>
+        </div>
       </div>
 
-      {/* Dynamic Data Sources Status */}
-      <Card className="p-8">
-        <h3 className="text-xl font-bold text-gray-900 mb-6">Data Sources Status</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {metrics?.data_sources_list?.map((source, index) => (
-            <div key={index} className="flex items-center space-x-3">
-              <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-              <div>
-                <p className="font-medium text-gray-900">{source}</p>
-                <p className="text-sm text-gray-600">
-                  {source === 'Space-Track.org' && 'Official US Government TLE Data - Active'}
-                  {source === 'NOAA SWPC' && 'Space Weather Data - Active'}
-                  {source === 'Orbital Mechanics' && 'Real-time Calculations - Active'}
-                </p>
+      {/* High-Risk Satellite Pairs */}
+      {collisionPrediction?.high_risk_pairs && collisionPrediction.high_risk_pairs.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+            <AlertTriangle className="w-5 h-5 mr-2 text-red-600" />
+            High-Risk Satellite Pairs
+          </h3>
+          <div className="space-y-3">
+            {collisionPrediction.high_risk_pairs.slice(0, 5).map((pair, index) => (
+              <div key={index} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {pair.satellite1.name} ↔ {pair.satellite2.name}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      NORAD IDs: {pair.satellite1.norad_id} & {pair.satellite2.norad_id}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-bold text-red-600">
+                      {(pair.combined_risk * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {pair.closest_approach_km.toFixed(1)} km
+                    </p>
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
-          
-          {/* Show if less than 3 sources */}
-          {(metrics?.data_sources_active || 0) < 3 && (
-            <div className="flex items-center space-x-3">
-              <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-              <div>
-                <p className="font-medium text-gray-900">Additional Sources</p>
-                <p className="text-sm text-gray-600">Integration in progress</p>
-              </div>
-            </div>
-          )}
-        </div>
-        
-        <div className="mt-6 p-4 bg-blue-50 rounded-xl">
-          <div className="flex items-center space-x-2 mb-2">
-            <Globe className="w-5 h-5 text-blue-600" />
-            <p className="font-semibold text-blue-900">System Performance</p>
+            ))}
           </div>
-          <p className="text-blue-700">
-            Last updated: {metrics?.last_updated ? new Date(metrics.last_updated).toLocaleString() : 'Loading...'}
-          </p>
-          <p className="text-blue-700">
-            Tracking coverage: {formatNumber(metrics?.tracking_coverage || 0, 1)}% of satellites with fresh data
-          </p>
         </div>
-      </Card>
+      )}
+
+      {/* Critical Time Windows */}
+      {collisionPrediction?.critical_time_windows && collisionPrediction.critical_time_windows.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+            <Clock className="w-5 h-5 mr-2 text-orange-600" />
+            Critical Time Windows
+          </h3>
+          <div className="space-y-3">
+            {collisionPrediction.critical_time_windows.slice(0, 5).map((window, index) => (
+              <div key={index} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="font-medium text-gray-900">{window.satellite.name}</p>
+                    <p className="text-sm text-gray-600">NORAD ID: {window.satellite.norad_id}</p>
+                    <p className="text-sm text-gray-600">
+                      {new Date(window.time_window_start).toLocaleString()} - 
+                      {new Date(window.time_window_end).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      window.risk_level === 'CRITICAL' ? 'bg-red-100 text-red-700' :
+                      window.risk_level === 'HIGH' ? 'bg-orange-100 text-orange-700' :
+                      'bg-yellow-100 text-yellow-700'
+                    }`}>
+                      {window.risk_level}
+                    </span>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {(window.probability * 100).toFixed(1)}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Success Message */}
+      <div className="bg-green-50 border border-green-200 rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-green-900 mb-2">🎉 Real-Time Dashboard Active!</h3>
+        <p className="text-green-700">
+          Your dashboard is now displaying live data from {metrics?.data_sources_active || 0} sources: {metrics?.data_sources_list?.join(', ') || 'Loading...'}. 
+          Space Weather Kp Index: {metrics?.space_weather_kp?.toFixed(2) || 'N/A'}. 
+          Last updated: {metrics?.last_updated ? new Date(metrics.last_updated).toLocaleString() : 'Unknown'}
+        </p>
+      </div>
     </div>
   );
 } 

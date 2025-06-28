@@ -30,7 +30,7 @@ interface SystemMetrics {
   active_satellites: number;
   high_risk_objects: number;
   collision_alerts: number;
-  space_weather_kp: number;
+  space_weather_kp: number | null;
   data_sources_active: number;
   data_sources_list: string[];
   last_updated: string;

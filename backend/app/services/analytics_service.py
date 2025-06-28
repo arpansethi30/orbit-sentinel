@@ -28,7 +28,7 @@ class SystemMetrics:
     active_satellites: int
     high_risk_objects: int
     collision_alerts: int
-    space_weather_kp: float
+    space_weather_kp: Optional[float]
     data_sources_active: int
     data_sources_list: List[str]
     last_updated: datetime
@@ -61,7 +61,11 @@ class AdvancedAnalyticsService:
             active_satellites = 2156  # ~76% active
             high_risk_objects = random.randint(3, 12)  # Varying risk
             collision_alerts = random.randint(0, 5)  # Current alerts
-            space_weather_kp = round(random.uniform(1.5, 4.2), 1)  # Realistic Kp
+            
+            # Get real space weather data
+            from .space_weather import space_weather_service
+            space_weather = await space_weather_service.get_current_space_weather()
+            space_weather_kp = space_weather.geomagnetic_kp if space_weather else None
             
             # Data sources - based on what we actually have
             data_sources_list = ["Space-Track.org", "NOAA SWPC", "Orbital Mechanics"]
@@ -214,7 +218,7 @@ class AdvancedAnalyticsService:
             active_satellites=1950,
             high_risk_objects=8,
             collision_alerts=2,
-            space_weather_kp=3.2,
+            space_weather_kp=None,  # Use real data only
             data_sources_active=3,
             data_sources_list=["Space-Track.org", "NOAA SWPC", "Orbital Mechanics"],
             last_updated=datetime.now(timezone.utc),
