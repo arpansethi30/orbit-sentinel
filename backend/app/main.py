@@ -4,6 +4,7 @@ import logging
 
 # Import routers
 from .api.satellites import router as satellites_router
+from .api.dashboard import router as dashboard_router
 
 # Set up logging
 logging.basicConfig(
@@ -32,6 +33,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(satellites_router)
+app.include_router(dashboard_router)
 
 @app.get("/")
 async def root():
@@ -44,6 +46,7 @@ async def root():
         "endpoints": {
             "docs": "/docs",
             "satellites": "/satellites/",
+            "dashboard": "/api/dashboard/",
             "health": "/health"
         }
     }

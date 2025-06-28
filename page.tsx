@@ -147,7 +147,7 @@ const StatCard = ({
         <div className={cn(
           'p-3 rounded-xl', 
           colorClasses[color as keyof typeof colorClasses],
-          pulse && 'animate-pulse'
+          pulse && 'animation-pulse'
         )}>
           <Icon className="w-6 h-6" />
         </div>
@@ -557,4 +557,5 @@ export default function DashboardPage() {
       </Card>
     </div>
   );
+} 
 } 
